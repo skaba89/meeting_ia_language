@@ -1,0 +1,8 @@
+{
+  "name": "meetingai-api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "bash start.sh"
+  }
+}
