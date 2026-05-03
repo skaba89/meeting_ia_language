@@ -27,6 +27,7 @@ from app.middleware.auth_middleware import get_current_user
 from app.services.transcription_service import transcribe_audio
 from app.services.summary_service import generate_summary
 from app.services.translation_service import translate_text
+from app.tasks import process_transcription, process_summary, process_translation
 
 logger = logging.getLogger(__name__)
 
@@ -165,14 +166,15 @@ async def upload_meeting(
     "/{meeting_id}/transcribe",
     response_model=MeetingDetail,
     summary="Transcribe meeting audio",
-    description="Start transcription of the meeting's audio file using Groq Whisper API.",
+    description="Start transcription of the meeting's audio file using Groq Whisper API. "
+    "Transcription runs asynchronously via Celery worker.",
 )
 async def transcribe_meeting(
     meeting_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Meeting:
-    """Transcribe the audio file associated with a meeting."""
+    """Transcribe the audio file associated with a meeting (async via Celery)."""
     # Fetch the meeting
     result = await db.execute(
         select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == current_user.id)
@@ -191,58 +193,31 @@ async def transcribe_meeting(
             detail="Meeting has no audio file or file was deleted",
         )
 
-    # Update status to transcribing
+    # Update status to transcribing and dispatch Celery task
     meeting.status = MeetingStatus.TRANSCRIBING
     await db.flush()
 
-    try:
-        # Call the transcription service
-        transcription_result = await transcribe_audio(
-            file_path=meeting.audio_file_path,
-            language=None,  # Auto-detect language
-        )
+    process_transcription.delay(meeting_id=str(meeting.id))
 
-        # Update the meeting with transcription results
-        meeting.transcription_text = transcription_result["text"]
-        meeting.language = transcription_result["language"]
-        meeting.audio_duration = transcription_result["duration"]
-        meeting.status = MeetingStatus.TRANSCRIBED
+    await db.refresh(meeting)
+    logger.info("Transcription task dispatched for meeting %s", meeting.id)
 
-        await db.flush()
-        await db.refresh(meeting)
-
-        logger.info(
-            "Meeting transcribed: id=%s, language=%s, duration=%.1fs",
-            meeting.id,
-            meeting.language,
-            meeting.audio_duration or 0.0,
-        )
-
-        return meeting
-
-    except Exception as exc:
-        # Update status to failed
-        meeting.status = MeetingStatus.FAILED
-        await db.flush()
-        logger.error("Transcription failed for meeting %s: %s", meeting_id, exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Transcription failed: {str(exc)}",
-        ) from exc
+    return meeting
 
 
 @meetings_router.post(
     "/{meeting_id}/summary",
     response_model=MeetingDetail,
     summary="Generate meeting summary",
-    description="Generate a structured summary from the meeting transcription.",
+    description="Generate a structured summary from the meeting transcription. "
+    "Summarization runs asynchronously via Celery worker.",
 )
 async def summarize_meeting(
     meeting_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Meeting:
-    """Generate a structured summary for a meeting's transcription."""
+    """Generate a structured summary for a meeting's transcription (async via Celery)."""
     # Fetch the meeting
     result = await db.execute(
         select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == current_user.id)
@@ -261,65 +236,51 @@ async def summarize_meeting(
             detail="Meeting has no transcription text. Transcribe the meeting first.",
         )
 
-    # Update status to summarizing
+    # Update status to summarizing and dispatch Celery task
     meeting.status = MeetingStatus.SUMMARIZING
     await db.flush()
 
-    try:
-        # Generate the summary
-        summary: SummarySchema = await generate_summary(
-            transcription_text=meeting.transcription_text,
-            language=meeting.language or "en",
-        )
+    process_summary.delay(meeting_id=str(meeting.id))
 
-        # Store the summary as JSON
-        meeting.summary_json = summary.model_dump()
+    await db.refresh(meeting)
+    logger.info("Summary task dispatched for meeting %s", meeting.id)
 
-        # Translate if target language is set and different from source
-        if meeting.target_language and meeting.language and meeting.target_language != meeting.language:
-            try:
-                translated_text = await translate_text(
-                    text=meeting.transcription_text,
-                    source_lang=meeting.language,
-                    target_lang=meeting.target_language,
-                )
-                meeting.translation_text = translated_text
-                logger.info(
-                    "Translation completed for meeting %s: %s -> %s",
-                    meeting.id,
-                    meeting.language,
-                    meeting.target_language,
-                )
-            except Exception as translation_exc:
-                logger.warning(
-                    "Translation failed for meeting %s: %s. Continuing without translation.",
-                    meeting.id,
-                    translation_exc,
-                )
-                # Don't fail the whole operation if translation fails
+    return meeting
 
-        # Update status to completed
-        meeting.status = MeetingStatus.COMPLETED
-        await db.flush()
-        await db.refresh(meeting)
 
-        logger.info("Meeting summary generated: id=%s", meeting.id)
-        return meeting
+@meetings_router.post(
+    "/{meeting_id}/translate",
+    response_model=MeetingDetail,
+    summary="Translate meeting transcription",
+    description="Translate the meeting transcription to a target language. "
+    "Translation runs asynchronously via Celery worker.",
+)
+async def translate_meeting(
+    meeting_id: str,
+    target_language: str = Query(..., max_length=10, description="Target language code (e.g., 'fr', 'es')"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Meeting:
+    """Translate a meeting's transcription to a target language (async via Celery)."""
+    result = await db.execute(
+        select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == current_user.id)
+    )
+    meeting = result.scalar_one_or_none()
+    if meeting is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
+    if not meeting.transcription_text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Meeting has no transcription. Transcribe first.")
 
-    except HTTPException:
-        # Re-raise HTTP exceptions as-is
-        meeting.status = MeetingStatus.FAILED
-        await db.flush()
-        raise
-    except Exception as exc:
-        # Update status to failed
-        meeting.status = MeetingStatus.FAILED
-        await db.flush()
-        logger.error("Summary generation failed for meeting %s: %s", meeting_id, exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Summary generation failed: {str(exc)}",
-        ) from exc
+    meeting.target_language = target_language
+    await db.flush()
+    await db.refresh(meeting)
+
+    # Dispatch translation task
+    process_translation.delay(meeting_id=str(meeting.id), target_language=target_language)
+
+    logger.info("Translation task dispatched for meeting %s to %s", meeting.id, target_language)
+
+    return meeting
 
 
 @meetings_router.get(

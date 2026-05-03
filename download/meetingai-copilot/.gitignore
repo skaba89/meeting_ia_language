@@ -46,3 +46,6 @@ logs/
 
 # Uploads
 uploads/
+
+# Alembic versions cache
+backend/alembic/versions/__pycache__/

@@ -1,7 +1,7 @@
 """
 Summary service for the MeetingAI Copilot application.
 
-Generates structured meeting summaries using Groq or OpenRouter LLM APIs.
+Generates structured meeting summaries using the shared LLM client.
 Returns parsed JSON with summary, key decisions, action items, and participants.
 """
 
@@ -10,10 +10,9 @@ import logging
 import re
 from typing import Optional
 
-import httpx
-
 from app.config import settings
 from app.schemas.meeting import SummarySchema
+from app.services.llm_client import chat_completion
 
 logger = logging.getLogger(__name__)
 
@@ -66,89 +65,13 @@ def _extract_json_from_response(text: str) -> dict:
         raise ValueError(f"Invalid JSON in LLM response: {exc}") from exc
 
 
-async def _call_groq_api(transcription_text: str) -> str:
-    """Call the Groq API to generate a meeting summary.
-
-    Args:
-        transcription_text: The meeting transcription text to summarize.
-
-    Returns:
-        The raw text response from the Groq API.
-
-    Raises:
-        httpx.HTTPStatusError: If the API returns an error status.
-        Exception: If the API call fails.
-    """
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {settings.GROQ_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": "llama-3.3-70b-versatile",
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": transcription_text},
-        ],
-        "temperature": 0.3,
-        "max_tokens": 4096,
-        "response_format": {"type": "json_object"},
-    }
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        data = response.json()
-        content: str = data["choices"][0]["message"]["content"]
-        return content
-
-
-async def _call_openrouter_api(transcription_text: str) -> str:
-    """Call the OpenRouter API to generate a meeting summary.
-
-    Args:
-        transcription_text: The meeting transcription text to summarize.
-
-    Returns:
-        The raw text response from the OpenRouter API.
-
-    Raises:
-        httpx.HTTPStatusError: If the API returns an error status.
-        Exception: If the API call fails.
-    """
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://meetingai-copilot.app",
-        "X-Title": "MeetingAI Copilot",
-    }
-    payload = {
-        "model": "meta-llama/llama-3.3-70b-instruct",
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": transcription_text},
-        ],
-        "temperature": 0.3,
-        "max_tokens": 4096,
-    }
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        data = response.json()
-        content: str = data["choices"][0]["message"]["content"]
-        return content
-
-
 async def generate_summary(
     transcription_text: str,
     language: str = "en",
 ) -> SummarySchema:
     """Generate a structured summary from a meeting transcription.
 
-    Routes the request to either the Groq or OpenRouter API based on
-    the LLM_PROVIDER configuration setting.
+    Uses the shared LLM client with automatic provider fallback.
 
     Args:
         transcription_text: The full transcription text to summarize.
@@ -160,7 +83,7 @@ async def generate_summary(
 
     Raises:
         ValueError: If the LLM response cannot be parsed as valid JSON.
-        httpx.HTTPStatusError: If the API returns an error.
+        RuntimeError: If all LLM providers fail.
         Exception: If the summary generation fails.
     """
     if not transcription_text or not transcription_text.strip():
@@ -178,11 +101,14 @@ async def generate_summary(
     )
 
     try:
-        # Select the appropriate LLM provider
-        if settings.LLM_PROVIDER == "openrouter":
-            raw_response = await _call_openrouter_api(transcription_text)
-        else:
-            raw_response = await _call_groq_api(transcription_text)
+        # Use shared LLM client with JSON response format on Groq
+        raw_response = await chat_completion(
+            system_prompt=SYSTEM_PROMPT,
+            user_content=transcription_text,
+            temperature=0.3,
+            max_tokens=4096,
+            response_format={"type": "json_object"},
+        )
 
         # Parse the JSON response
         parsed = _extract_json_from_response(raw_response)
@@ -208,14 +134,11 @@ async def generate_summary(
         logger.error("Failed to parse summary JSON: %s", exc)
         # Return a fallback summary with the raw text
         return SummarySchema(
-            summary=f"Summary generation produced invalid format. Raw response saved.",
+            summary="Summary generation produced invalid format. Raw response saved.",
             key_decisions=[],
             action_items=[],
             participants=[],
         )
-    except httpx.HTTPStatusError as exc:
-        logger.error("LLM API returned error status: %s", exc)
-        raise Exception(f"LLM API error: {exc.response.status_code} - {exc.response.text}") from exc
     except Exception as exc:
         logger.error("Summary generation failed: %s", exc)
-        raise Exception(f"Summary generation failed: {str(exc)}") from exc
+        raise RuntimeError(f"Summary generation failed: {exc}") from exc

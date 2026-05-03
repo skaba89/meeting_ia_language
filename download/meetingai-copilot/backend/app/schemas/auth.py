@@ -4,10 +4,11 @@ Authentication schemas for the MeetingAI Copilot application.
 Pydantic models for request/response validation of auth endpoints.
 """
 
+import re
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class UserCreate(BaseModel):
@@ -15,13 +16,30 @@ class UserCreate(BaseModel):
 
     Attributes:
         email: User's email address.
-        password: User's password (minimum 8 characters).
+        password: User's password (min 8 chars, must contain at least 1 uppercase,
+                  1 lowercase, and 1 digit).
         full_name: User's display name.
     """
 
     email: EmailStr
-    password: str = Field(..., min_length=8, description="Password must be at least 8 characters")
+    password: str = Field(
+        ...,
+        min_length=8,
+        description="Password must be at least 8 characters and contain at least 1 uppercase letter, 1 lowercase letter, and 1 digit",
+    )
     full_name: str = Field(..., min_length=1, max_length=255, description="Full name of the user")
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, v: str) -> str:
+        """Ensure password contains at least one uppercase, one lowercase, and one digit."""
+        if not re.search(r"[A-Z]", v):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not re.search(r"[a-z]", v):
+            raise ValueError("Password must contain at least one lowercase letter")
+        if not re.search(r"\d", v):
+            raise ValueError("Password must contain at least one digit")
+        return v
 
 
 class UserLogin(BaseModel):

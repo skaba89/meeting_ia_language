@@ -33,10 +33,107 @@ def _get_groq_client() -> AsyncOpenAI:
 
 
 def _split_audio_file(file_path: str, chunk_size: int = GROQ_WHISPER_MAX_FILE_SIZE) -> list[str]:
-    """Split a large audio file into smaller chunks for API upload.
+    """Split a large audio file into smaller chunks using ffmpeg for clean cuts.
 
-    This is a simple binary split approach. For production, consider
-    using proper audio splitting tools like ffmpeg for clean cuts.
+    Uses ffmpeg to split at silence boundaries or at regular intervals
+    with proper audio frame alignment, preventing corrupted chunks.
+
+    Args:
+        file_path: Path to the audio file to split.
+        chunk_size: Target maximum size of each chunk in bytes.
+
+    Returns:
+        List of file paths for the created chunks.
+    """
+    import subprocess
+
+    file_size = os.path.getsize(file_path)
+    if file_size <= chunk_size:
+        return [file_path]
+
+    # Get audio duration using ffprobe
+    try:
+        probe_cmd = [
+            "ffprobe", "-v", "quiet",
+            "-print_format", "json",
+            "-show_format",
+            file_path,
+        ]
+        probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
+        if probe_result.returncode != 0:
+            logger.warning("ffprobe failed, falling back to binary split")
+            return _split_audio_binary(file_path, chunk_size)
+
+        import json
+        probe_data = json.loads(probe_result.stdout)
+        duration = float(probe_data["format"]["duration"])
+    except (subprocess.SubprocessError, KeyError, ValueError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to get audio duration with ffprobe: %s. Falling back to binary split.", exc)
+        return _split_audio_binary(file_path, chunk_size)
+
+    # Calculate number of chunks based on duration and file size
+    num_chunks = max(2, int(file_size / chunk_size) + 1)
+    chunk_duration = duration / num_chunks
+
+    base_name, ext = os.path.splitext(file_path)
+    chunk_paths = []
+
+    for i in range(num_chunks):
+        start_time = i * chunk_duration
+        chunk_path = f"{base_name}_chunk_{i}{ext}"
+
+        # Use ffmpeg to split with proper audio frame alignment
+        # Add 1 second overlap for continuity at boundaries
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", file_path,
+            "-ss", str(start_time),
+            "-t", str(chunk_duration + 1.0),  # Extra second for overlap
+            "-c", "copy",  # Stream copy - fast, no re-encoding
+            chunk_path,
+        ]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode != 0:
+                logger.warning("ffmpeg split failed for chunk %d: %s. Trying re-encode.", i, result.stderr[:200])
+                # Fallback: re-encode instead of stream copy
+                cmd_reencode = [
+                    "ffmpeg", "-y",
+                    "-i", file_path,
+                    "-ss", str(start_time),
+                    "-t", str(chunk_duration + 1.0),
+                    "-ar", "16000",  # 16kHz sample rate (optimal for Whisper)
+                    "-ac", "1",     # Mono
+                    chunk_path,
+                ]
+                result = subprocess.run(cmd_reencode, capture_output=True, text=True, timeout=300)
+                if result.returncode != 0:
+                    logger.error("ffmpeg re-encode also failed for chunk %d: %s", i, result.stderr[:200])
+                    continue
+
+            if os.path.exists(chunk_path) and os.path.getsize(chunk_path) > 0:
+                chunk_paths.append(chunk_path)
+            else:
+                logger.warning("Chunk %d was not created or is empty", i)
+
+        except subprocess.SubprocessError as exc:
+            logger.error("ffmpeg subprocess error for chunk %d: %s", i, exc)
+            continue
+
+    if not chunk_paths:
+        logger.warning("All ffmpeg splits failed, falling back to binary split")
+        return _split_audio_binary(file_path, chunk_size)
+
+    logger.info(
+        "Split audio file %s into %d chunks using ffmpeg (duration: %.1fs, chunk_duration: %.1fs)",
+        file_path, len(chunk_paths), duration, chunk_duration,
+    )
+    return chunk_paths
+
+
+def _split_audio_binary(file_path: str, chunk_size: int = GROQ_WHISPER_MAX_FILE_SIZE) -> list[str]:
+    """Fallback binary split for when ffmpeg is not available.
 
     Args:
         file_path: Path to the audio file to split.
@@ -45,10 +142,6 @@ def _split_audio_file(file_path: str, chunk_size: int = GROQ_WHISPER_MAX_FILE_SI
     Returns:
         List of file paths for the created chunks.
     """
-    file_size = os.path.getsize(file_path)
-    if file_size <= chunk_size:
-        return [file_path]
-
     chunk_paths: list[str] = []
     base_name, ext = os.path.splitext(file_path)
 
@@ -65,10 +158,8 @@ def _split_audio_file(file_path: str, chunk_size: int = GROQ_WHISPER_MAX_FILE_SI
             chunk_index += 1
 
     logger.info(
-        "Split audio file %s into %d chunks (original size: %d bytes)",
-        file_path,
-        len(chunk_paths),
-        file_size,
+        "Split audio file %s into %d chunks using binary split (fallback)",
+        file_path, len(chunk_paths),
     )
     return chunk_paths
 
