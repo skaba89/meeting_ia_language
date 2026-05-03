@@ -14,9 +14,9 @@
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────┐
-│   Next.js 14    │────▶│   FastAPI 0.115  │────▶│  PostgreSQL │
-│   Frontend      │◀────│   Backend        │◀────│     16      │
-│   (Port 3000)   │     │   (Port 8000)    │     │  (Port 5432)│
+│   Next.js 14    │────▶│   FastAPI 0.115  │────▶│ PostgreSQL  │
+│   Frontend      │◀────│   Backend        │◀────│ or SQLite   │
+│   (Port 3000)   │     │   (Port 8000)    │     │             │
 └─────────────────┘     └────────┬────────┘     └─────────────┘
                                  │
                     ┌────────────┴────────────┐
@@ -28,39 +28,46 @@
               └───────────┘           └─────────────┘
 ```
 
-## Tech Stack
+## Quick Start (Local Development — No Docker Needed)
 
-| Layer       | Technology                                  |
-|-------------|---------------------------------------------|
-| Frontend    | Next.js 14, React 18, TypeScript, Tailwind CSS |
-| Backend     | FastAPI 0.115, SQLAlchemy 2.0 (async), Pydantic 2 |
-| Database    | PostgreSQL 16                               |
-| AI - STT    | Groq Whisper API (whisper-large-v3)         |
-| AI - LLM    | Groq (llama-3.3-70b-versatile) / OpenRouter |
-| Auth        | JWT (python-jose) + bcrypt (passlib)        |
-| Container   | Docker Compose                              |
-
-## Quick Start
+The easiest way to get started is using **SQLite** (no PostgreSQL installation required).
 
 ### Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
+- Python 3.12+
+- Node.js 20+
 - Groq API key (free at [console.groq.com](https://console.groq.com))
 
-### 1. Clone and configure
+### 1. Backend
 
 ```bash
-cd meetingai-copilot
+cd backend
 
-# Create .env file with your API keys
-cp .env.example .env
-# Edit .env and add your GROQ_API_KEY and OPENROUTER_API_KEY
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate  # Linux/macOS
+
+# Install dependencies
+pip install -r requirements.txt
+
+# The .env file is already configured with SQLite:
+# DATABASE_URL=sqlite+aiosqlite:///./meetingai.db
+# Just add your Groq API key to backend/.env
+
+# Run the server
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### 2. Launch with Docker Compose
+### 2. Frontend
 
 ```bash
-docker compose up --build
+cd frontend
+
+# Install dependencies
+npm install
+
+# Run the dev server
+NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
 ```
 
 ### 3. Access the application
@@ -77,6 +84,51 @@ docker compose up --build
 3. Upload a meeting recording (MP3, WAV, M4A, or WebM)
 4. Click "Transcribe" to generate a transcription
 5. Click "Generate Summary" to get a structured summary
+
+---
+
+## Quick Start (Docker — Production with PostgreSQL)
+
+### Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) and Docker Compose
+- Groq API key
+
+### 1. Configure API keys
+
+```bash
+cd meetingai-copilot
+
+# Edit .env and add your GROQ_API_KEY and OPENROUTER_API_KEY
+nano .env
+```
+
+### 2. Switch backend to PostgreSQL
+
+Edit `backend/.env` and change:
+```
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/meetingai
+```
+
+### 3. Launch with Docker Compose
+
+```bash
+docker compose up --build
+```
+
+---
+
+## Tech Stack
+
+| Layer       | Technology                                  |
+|-------------|---------------------------------------------|
+| Frontend    | Next.js 14, React 18, TypeScript, Tailwind CSS |
+| Backend     | FastAPI 0.115, SQLAlchemy 2.0 (async), Pydantic 2 |
+| Database    | PostgreSQL 16 (Docker) / SQLite (local dev) |
+| AI - STT    | Groq Whisper API (whisper-large-v3)         |
+| AI - LLM    | Groq (llama-3.3-70b-versatile) / OpenRouter |
+| Auth        | JWT (python-jose) + bcrypt (passlib)        |
+| Container   | Docker Compose                              |
 
 ## API Endpoints
 
@@ -122,7 +174,7 @@ meetingai-copilot/
 │       ├── __init__.py
 │       ├── main.py              # FastAPI app + lifespan
 │       ├── config.py            # Settings (pydantic-settings)
-│       ├── database.py          # Async SQLAlchemy setup
+│       ├── database.py          # Async SQLAlchemy (PostgreSQL/SQLite)
 │       ├── models/
 │       │   ├── __init__.py
 │       │   ├── user.py          # User model (UUID PK)
@@ -178,7 +230,7 @@ meetingai-copilot/
 
 | Variable                      | Default                                  | Description                        |
 |-------------------------------|------------------------------------------|------------------------------------|
-| `DATABASE_URL`                | `postgresql+asyncpg://postgres:postgres@db:5432/meetingai` | PostgreSQL connection string |
+| `DATABASE_URL`                | `sqlite+aiosqlite:///./meetingai.db`     | DB connection (SQLite or PostgreSQL) |
 | `SECRET_KEY`                  | `meetingai-super-secret-key-...`         | JWT signing key                    |
 | `ALGORITHM`                   | `HS256`                                  | JWT algorithm                      |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `60`                                     | Token expiration time              |
@@ -189,44 +241,6 @@ meetingai-copilot/
 | `UPLOAD_DIR`                  | `./uploads`                              | Audio upload directory             |
 | `MAX_UPLOAD_SIZE_MB`          | `100`                                    | Max upload size in MB              |
 | `NEXT_PUBLIC_API_URL`         | `http://localhost:8000`                  | Backend URL (frontend only)        |
-
-## Running Locally (without Docker)
-
-### Backend
-
-```bash
-cd backend
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Linux/macOS
-# venv\Scripts\activate   # Windows
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Set environment variables (or use .env file)
-export DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/meetingai
-export GROQ_API_KEY=your_key_here
-
-# Run the server
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-### Frontend
-
-```bash
-cd frontend
-
-# Install dependencies
-npm install
-
-# Set environment variables
-export NEXT_PUBLIC_API_URL=http://localhost:8000
-
-# Run the dev server
-npm run dev
-```
 
 ## LLM Provider Configuration
 

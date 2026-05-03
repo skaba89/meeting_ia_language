@@ -2,7 +2,7 @@
 Database configuration module using SQLAlchemy async engine.
 
 Provides async engine, session factory, and dependency injection
-for PostgreSQL database access via asyncpg driver.
+for PostgreSQL (production/Docker) or SQLite (local development) access.
 """
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
@@ -11,12 +11,25 @@ from typing import AsyncGenerator
 
 from app.config import settings
 
+# Build engine kwargs based on database type
+_is_sqlite = settings.DATABASE_URL.startswith("sqlite")
+
+_engine_kwargs = {
+    "echo": False,
+}
+
+if _is_sqlite:
+    # SQLite-specific configuration
+    _engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    # PostgreSQL-specific configuration
+    _engine_kwargs["pool_size"] = 5
+    _engine_kwargs["max_overflow"] = 10
+    _engine_kwargs["pool_pre_ping"] = True
+
 async_engine = create_async_engine(
     settings.DATABASE_URL,
-    echo=False,
-    pool_size=5,
-    max_overflow=10,
-    pool_pre_ping=True,
+    **_engine_kwargs,
 )
 
 AsyncSessionLocal = async_sessionmaker(

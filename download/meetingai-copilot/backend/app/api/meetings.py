@@ -11,7 +11,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -96,26 +96,7 @@ async def upload_meeting(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Meeting:
-    """Upload an audio file and create a meeting record.
-
-    Accepts a multipart form with an audio file, title, and optional
-    target language. Validates the file type and size, saves it to the
-    upload directory, and creates a new Meeting record with 'uploaded' status.
-
-    Args:
-        audio: The uploaded audio file.
-        title: The meeting title.
-        target_language: Optional target language for future translation.
-        db: The async database session.
-        current_user: The authenticated user.
-
-    Returns:
-        The newly created Meeting model instance.
-
-    Raises:
-        HTTPException: 400 if file type is invalid or file is too large.
-        HTTPException: 500 if the file cannot be saved.
-    """
+    """Upload an audio file and create a meeting record."""
     # Validate the audio file type
     _validate_audio_file(audio.filename, audio.content_type)
 
@@ -187,30 +168,11 @@ async def upload_meeting(
     description="Start transcription of the meeting's audio file using Groq Whisper API.",
 )
 async def transcribe_meeting(
-    meeting_id: uuid.UUID,
+    meeting_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Meeting:
-    """Transcribe the audio file associated with a meeting.
-
-    Updates the meeting status to 'transcribing', calls the Groq Whisper
-    transcription service, and updates the meeting with the transcription
-    text, detected language, and audio duration.
-
-    Args:
-        meeting_id: The UUID of the meeting to transcribe.
-        db: The async database session.
-        current_user: The authenticated user.
-
-    Returns:
-        The updated Meeting model instance with transcription data.
-
-    Raises:
-        HTTPException: 404 if the meeting is not found.
-        HTTPException: 403 if the user doesn't own the meeting.
-        HTTPException: 400 if the meeting has no audio file.
-        HTTPException: 500 if transcription fails.
-    """
+    """Transcribe the audio file associated with a meeting."""
     # Fetch the meeting
     result = await db.execute(
         select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == current_user.id)
@@ -276,30 +238,11 @@ async def transcribe_meeting(
     description="Generate a structured summary from the meeting transcription.",
 )
 async def summarize_meeting(
-    meeting_id: uuid.UUID,
+    meeting_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Meeting:
-    """Generate a structured summary for a meeting's transcription.
-
-    Updates the meeting status to 'summarizing', calls the summary
-    generation service, and optionally translates the transcription
-    if a target language is set.
-
-    Args:
-        meeting_id: The UUID of the meeting to summarize.
-        db: The async database session.
-        current_user: The authenticated user.
-
-    Returns:
-        The updated Meeting model instance with summary data.
-
-    Raises:
-        HTTPException: 404 if the meeting is not found.
-        HTTPException: 403 if the user doesn't own the meeting.
-        HTTPException: 400 if the meeting has no transcription.
-        HTTPException: 500 if summary generation fails.
-    """
+    """Generate a structured summary for a meeting's transcription."""
     # Fetch the meeting
     result = await db.execute(
         select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == current_user.id)
@@ -391,17 +334,7 @@ async def list_meetings(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[Meeting]:
-    """List the authenticated user's meetings, newest first.
-
-    Args:
-        skip: Number of records to skip for pagination.
-        limit: Maximum number of records to return.
-        db: The async database session.
-        current_user: The authenticated user.
-
-    Returns:
-        A list of Meeting model instances owned by the current user.
-    """
+    """List the authenticated user's meetings, newest first."""
     result = await db.execute(
         select(Meeting)
         .where(Meeting.user_id == current_user.id)
@@ -420,25 +353,11 @@ async def list_meetings(
     description="Retrieve full meeting details including transcription, summary, and translation.",
 )
 async def get_meeting(
-    meeting_id: uuid.UUID,
+    meeting_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Meeting:
-    """Retrieve the full details of a specific meeting.
-
-    Includes transcription text, summary JSON, and translation text.
-
-    Args:
-        meeting_id: The UUID of the meeting to retrieve.
-        db: The async database session.
-        current_user: The authenticated user.
-
-    Returns:
-        The Meeting model instance with full detail data.
-
-    Raises:
-        HTTPException: 404 if the meeting is not found or not owned by the user.
-    """
+    """Retrieve the full details of a specific meeting."""
     result = await db.execute(
         select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == current_user.id)
     )
@@ -460,23 +379,11 @@ async def get_meeting(
     description="Delete a meeting and its associated audio file.",
 )
 async def delete_meeting(
-    meeting_id: uuid.UUID,
+    meeting_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> None:
-    """Delete a meeting and its associated audio file.
-
-    Removes the audio file from the filesystem and deletes the
-    meeting record from the database.
-
-    Args:
-        meeting_id: The UUID of the meeting to delete.
-        db: The async database session.
-        current_user: The authenticated user.
-
-    Raises:
-        HTTPException: 404 if the meeting is not found or not owned by the user.
-    """
+    """Delete a meeting and its associated audio file."""
     result = await db.execute(
         select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == current_user.id)
     )

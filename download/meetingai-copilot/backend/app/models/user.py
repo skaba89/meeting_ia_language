@@ -3,16 +3,22 @@ User model for the MeetingAI Copilot application.
 
 Defines the SQLAlchemy ORM model for user accounts with
 UUID primary keys and authentication-related fields.
+Compatible with both PostgreSQL (UUID type) and SQLite (String type).
 """
 
 import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import String, Boolean, DateTime
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.config import settings
 from app.database import Base
+
+# Use PostgreSQL UUID type when connected to PostgreSQL,
+# otherwise use String(36) for SQLite compatibility
+_is_postgres = "postgresql" in settings.DATABASE_URL
 
 
 class User(Base):
@@ -29,10 +35,10 @@ class User(Base):
 
     __tablename__ = "users"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[str] = mapped_column(
+        PG_UUID(as_uuid=True) if _is_postgres else String(36),
         primary_key=True,
-        default=uuid.uuid4,
+        default=lambda: str(uuid.uuid4()),
         index=True,
     )
     email: Mapped[str] = mapped_column(

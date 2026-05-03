@@ -91,9 +91,6 @@ def decode_access_token(token: str) -> TokenData:
         user_id_str: Optional[str] = payload.get("sub")
         if user_id_str is None:
             raise JWTError("Token payload missing 'sub' claim")
-        from uuid import UUID
-
-        user_id = UUID(user_id_str)
-        return TokenData(user_id=user_id)
+        return TokenData(user_id=user_id_str)
     except (JWTError, ValueError) as exc:
         raise JWTError(f"Could not validate credentials: {exc}") from exc

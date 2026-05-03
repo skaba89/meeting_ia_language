@@ -3,17 +3,23 @@ Meeting model for the MeetingAI Copilot application.
 
 Defines the SQLAlchemy ORM model for meeting records including
 audio file metadata, transcription data, summaries, and translations.
+Compatible with both PostgreSQL (UUID type) and SQLite (String type).
 """
 
 import uuid
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Text, DateTime, Enum, ForeignKey, Float
-from sqlalchemy.dialects.postgresql import UUID, JSON
+from sqlalchemy import String, Text, DateTime, Enum, ForeignKey, Float, JSON
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.config import settings
 from app.database import Base
+
+# Use PostgreSQL UUID type when connected to PostgreSQL,
+# otherwise use String(36) for SQLite compatibility
+_is_postgres = "postgresql" in settings.DATABASE_URL
 
 
 class MeetingStatus(str, enum.Enum):
@@ -48,8 +54,7 @@ class Meeting(Base):
         language: Detected or specified language of the audio.
         status: Current processing status of the meeting.
         transcription_text: Full transcription text from the audio.
-        summary_json: Structured summary data (JSON) with keys:
-            summary, key_decisions, action_items, participants.
+        summary_json: Structured summary data (JSON).
         translation_text: Translated version of the transcription.
         target_language: Target language for translation (optional).
         user_id: Foreign key referencing the owning user.
@@ -59,21 +64,21 @@ class Meeting(Base):
 
     __tablename__ = "meetings"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[str] = mapped_column(
+        PG_UUID(as_uuid=True) if _is_postgres else String(36),
         primary_key=True,
-        default=uuid.uuid4,
+        default=lambda: str(uuid.uuid4()),
         index=True,
     )
     title: Mapped[str] = mapped_column(
         String(500),
         nullable=False,
     )
-    audio_filename: Mapped[str] = mapped_column(
+    audio_filename: Mapped[str | None] = mapped_column(
         String(500),
         nullable=True,
     )
-    audio_file_path: Mapped[str] = mapped_column(
+    audio_file_path: Mapped[str | None] = mapped_column(
         String(1000),
         nullable=True,
     )
@@ -106,8 +111,8 @@ class Meeting(Base):
         String(10),
         nullable=True,
     )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+    user_id: Mapped[str] = mapped_column(
+        PG_UUID(as_uuid=True) if _is_postgres else String(36),
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,

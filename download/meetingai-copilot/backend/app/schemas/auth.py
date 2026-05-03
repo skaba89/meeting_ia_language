@@ -4,7 +4,6 @@ Authentication schemas for the MeetingAI Copilot application.
 Pydantic models for request/response validation of auth endpoints.
 """
 
-import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -41,14 +40,14 @@ class UserResponse(BaseModel):
     """Schema for user data in API responses.
 
     Attributes:
-        id: User's UUID.
+        id: User's UUID as string.
         email: User's email address.
         full_name: User's display name.
         created_at: Timestamp of account creation.
         is_active: Whether the account is active.
     """
 
-    id: uuid.UUID
+    id: str
     email: str
     full_name: str
     created_at: datetime
@@ -73,7 +72,7 @@ class TokenData(BaseModel):
     """Schema for decoded JWT token payload.
 
     Attributes:
-        user_id: The UUID of the authenticated user.
+        user_id: The UUID string of the authenticated user.
     """
 
-    user_id: Optional[uuid.UUID] = None
+    user_id: Optional[str] = None

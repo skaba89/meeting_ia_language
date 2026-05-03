@@ -4,7 +4,6 @@ Meeting schemas for the MeetingAI Copilot application.
 Pydantic models for request/response validation of meeting endpoints.
 """
 
-import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -56,7 +55,7 @@ class MeetingResponse(BaseModel):
     """Schema for meeting data in list/response endpoints.
 
     Attributes:
-        id: Meeting UUID.
+        id: Meeting UUID as string.
         title: Meeting title.
         audio_filename: Original audio filename.
         language: Detected language of the audio.
@@ -65,7 +64,7 @@ class MeetingResponse(BaseModel):
         updated_at: Timestamp of last update.
     """
 
-    id: uuid.UUID
+    id: str
     title: str
     audio_filename: Optional[str] = None
     language: Optional[str] = None
@@ -80,7 +79,7 @@ class MeetingDetail(BaseModel):
     """Schema for detailed meeting data including full content.
 
     Attributes:
-        id: Meeting UUID.
+        id: Meeting UUID as string.
         title: Meeting title.
         audio_filename: Original audio filename.
         language: Detected language of the audio.
@@ -94,7 +93,7 @@ class MeetingDetail(BaseModel):
         updated_at: Timestamp of last update.
     """
 
-    id: uuid.UUID
+    id: str
     title: str
     audio_filename: Optional[str] = None
     language: Optional[str] = None

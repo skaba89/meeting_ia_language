@@ -1,12 +1,22 @@
 """
 Application configuration module using pydantic-settings.
 
-Loads environment variables from .env file and provides
-type-safe configuration access throughout the application.
+Loads environment variables from .env file with override priority
+and provides type-safe configuration access throughout the application.
 """
 
-from pydantic_settings import BaseSettings
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
+
+# Load .env file with override=True so that .env values take precedence
+# over system environment variables that may conflict (e.g., DATABASE_URL
+# from a parent project's environment).
+_env_file = Path(__file__).resolve().parent.parent / ".env"
+if _env_file.exists():
+    load_dotenv(_env_file, override=True)
 
 
 class Settings(BaseSettings):
@@ -36,11 +46,12 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     MAX_UPLOAD_SIZE_MB: int = 100
 
-    model_config = {
-        "env_file": ".env",
-        "env_file_encoding": "utf-8",
-        "case_sensitive": True,
-    }
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
 
 
 settings = Settings()
