@@ -12,6 +12,9 @@ from passlib.context import CryptContext
 
 from app.config import settings
 from app.schemas.auth import TokenData
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Password hashing context using bcrypt
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

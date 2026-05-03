@@ -5,16 +5,16 @@ Tasks for transcription, summarization, and translation that run
 in the background via Celery workers.
 """
 
-import logging
 from app.celery_worker import celery_app
 from app.database import AsyncSessionLocal
 from app.models.meeting import Meeting, MeetingStatus
 from app.services.transcription_service import transcribe_audio
 from app.services.summary_service import generate_summary
 from app.services.translation_service import translate_text
+from app.core.logging import get_logger
 from sqlalchemy import select
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @celery_app.task(bind=True, name="app.tasks.process_transcription", max_retries=3)

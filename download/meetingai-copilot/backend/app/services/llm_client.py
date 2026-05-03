@@ -7,14 +7,15 @@ providers.
 """
 
 import asyncio
-import logging
 from typing import Any, Optional
 
 import httpx
 
 from app.config import settings
+from app.core.logging import get_logger
+from app.core.exceptions import ExternalServiceError
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Provider configuration
@@ -80,10 +81,10 @@ async def _call_groq(
 
     Raises:
         httpx.HTTPStatusError: On non-2xx responses.
-        RuntimeError: If GROQ_API_KEY is not configured.
+        ExternalServiceError: If GROQ_API_KEY is not configured.
     """
     if settings.GROQ_API_KEY in _INSECURE_KEYS:
-        raise RuntimeError("GROQ_API_KEY is not configured")
+        raise ExternalServiceError(service="Groq", message="GROQ_API_KEY is not configured")
 
     client = await _get_client()
     headers = {
@@ -128,10 +129,10 @@ async def _call_openrouter(
 
     Raises:
         httpx.HTTPStatusError: On non-2xx responses.
-        RuntimeError: If OPENROUTER_API_KEY is not configured.
+        ExternalServiceError: If OPENROUTER_API_KEY is not configured.
     """
     if settings.OPENROUTER_API_KEY in _INSECURE_KEYS:
-        raise RuntimeError("OPENROUTER_API_KEY is not configured")
+        raise ExternalServiceError(service="OpenRouter", message="OPENROUTER_API_KEY is not configured")
 
     client = await _get_client()
     headers = {
@@ -232,7 +233,7 @@ async def chat_completion(
         The assistant's content string from the LLM.
 
     Raises:
-        RuntimeError: If neither provider has a configured API key.
+        ExternalServiceError: If neither provider has a configured API key or both providers fail.
         httpx.HTTPStatusError: If both providers return error statuses.
     """
     primary = provider or settings.LLM_PROVIDER
@@ -286,7 +287,14 @@ async def chat_completion(
             primary_exc,
             fallback_exc,
         )
-        raise RuntimeError(
-            f"All LLM providers failed. Primary error: {primary_exc}; "
-            f"Fallback error: {fallback_exc}"
+        raise ExternalServiceError(
+            service="LLM Providers",
+            message=f"All LLM providers failed. Primary error: {primary_exc}; "
+                    f"Fallback error: {fallback_exc}",
+            details={
+                "primary_provider": primary,
+                "fallback_provider": secondary,
+                "primary_error": str(primary_exc),
+                "fallback_error": str(fallback_exc),
+            },
         ) from fallback_exc

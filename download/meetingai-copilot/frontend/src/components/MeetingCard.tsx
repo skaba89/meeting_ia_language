@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Clock, Globe, Trash2, FileAudio, AlertCircle, Loader2 } from 'lucide-react';
+import { Clock, Globe, Trash2, FileAudio, AlertCircle, Loader2, CheckCircle, Brain, Languages } from 'lucide-react';
 import { apiClient, Meeting } from '@/lib/api';
 import clsx from 'clsx';
 
@@ -13,37 +13,43 @@ interface MeetingCardProps {
 
 const STATUS_CONFIG: Record<
   Meeting['status'],
-  { label: string; bgColor: string; textColor: string }
+  { label: string; bgColor: string; textColor: string; icon?: React.ElementType }
 > = {
   uploaded: {
     label: 'Uploaded',
     bgColor: 'bg-gray-100',
     textColor: 'text-gray-600',
+    icon: FileAudio,
   },
   transcribing: {
     label: 'Transcribing',
     bgColor: 'bg-amber-50',
     textColor: 'text-amber-700',
+    icon: Loader2,
   },
   transcribed: {
     label: 'Transcribed',
     bgColor: 'bg-blue-50',
     textColor: 'text-blue-700',
+    icon: FileAudio,
   },
   summarizing: {
     label: 'Summarizing',
     bgColor: 'bg-purple-50',
     textColor: 'text-purple-700',
+    icon: Loader2,
   },
   completed: {
     label: 'Completed',
     bgColor: 'bg-emerald-50',
     textColor: 'text-success',
+    icon: CheckCircle,
   },
   failed: {
     label: 'Failed',
     bgColor: 'bg-red-50',
     textColor: 'text-error',
+    icon: AlertCircle,
   },
 };
 
@@ -83,6 +89,7 @@ export default function MeetingCard({ meeting, onDelete }: MeetingCardProps) {
   const statusConfig = STATUS_CONFIG[meeting.status] || STATUS_CONFIG.uploaded;
   const isProcessing =
     meeting.status === 'transcribing' || meeting.status === 'summarizing';
+  const StatusIcon = statusConfig.icon;
 
   const handleClick = () => {
     router.push(`/meeting/${meeting.id}`);
@@ -114,14 +121,14 @@ export default function MeetingCard({ meeting, onDelete }: MeetingCardProps) {
     <div
       onClick={handleClick}
       className={clsx(
-        'card cursor-pointer p-5 transition-all duration-200 hover:shadow-md',
+        'card cursor-pointer p-5 transition-all duration-200 hover:shadow-card-hover hover:-translate-y-0.5',
         isProcessing && 'animate-pulse-slow'
       )}
     >
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-primary-50 text-primary-600">
+            <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary-50 to-accent-50 border border-primary-100 text-primary-600">
               <FileAudio className="h-5 w-5" />
             </div>
             <div className="min-w-0 flex-1">
@@ -136,11 +143,6 @@ export default function MeetingCard({ meeting, onDelete }: MeetingCardProps) {
                     {formatDuration(meeting.audio_duration)}
                   </span>
                 )}
-                {meeting.audio_filename && (
-                  <span className="inline-flex items-center gap-1 truncate max-w-[150px]">
-                    {meeting.audio_filename}
-                  </span>
-                )}
                 {meeting.language && (
                   <span className="inline-flex items-center gap-1">
                     <Globe className="h-3 w-3" />
@@ -150,33 +152,60 @@ export default function MeetingCard({ meeting, onDelete }: MeetingCardProps) {
               </div>
             </div>
           </div>
+
+          {/* Content indicators */}
+          {meeting.status === 'completed' && (
+            <div className="mt-3 flex flex-wrap gap-2 ml-14">
+              {meeting.transcription_text && (
+                <span className="inline-flex items-center gap-1 rounded-md bg-primary-50 px-2 py-0.5 text-xs font-medium text-primary-600">
+                  <FileAudio className="h-3 w-3" />
+                  Transcribed
+                </span>
+              )}
+              {meeting.summary_json && (
+                <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-medium text-success">
+                  <Brain className="h-3 w-3" />
+                  Summarized
+                </span>
+              )}
+              {meeting.translation_text && (
+                <span className="inline-flex items-center gap-1 rounded-md bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-600">
+                  <Languages className="h-3 w-3" />
+                  Translated
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="flex flex-shrink-0 items-center gap-2">
           <span
             className={clsx(
-              'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium',
+              'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium',
               statusConfig.bgColor,
               statusConfig.textColor
             )}
           >
-            {isProcessing && <Loader2 className="h-3 w-3 animate-spin" />}
-            {meeting.status === 'failed' && <AlertCircle className="h-3 w-3" />}
+            {StatusIcon && (
+              <StatusIcon
+                className={clsx('h-3 w-3', isProcessing && 'animate-spin')}
+              />
+            )}
             {statusConfig.label}
           </span>
 
           {showDeleteConfirm ? (
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 animate-fade-in">
               <button
                 onClick={handleDelete}
                 disabled={deleting}
-                className="rounded-md bg-error px-2 py-1 text-xs font-medium text-white hover:bg-red-600"
+                className="rounded-md bg-error px-2 py-1 text-xs font-medium text-white hover:bg-red-600 transition-colors"
               >
                 {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Delete'}
               </button>
               <button
                 onClick={handleCancelDelete}
-                className="rounded-md px-2 py-1 text-xs font-medium text-muted hover:text-dark"
+                className="rounded-md px-2 py-1 text-xs font-medium text-muted hover:text-dark transition-colors"
               >
                 Cancel
               </button>

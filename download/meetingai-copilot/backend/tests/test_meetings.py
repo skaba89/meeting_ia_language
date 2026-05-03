@@ -41,14 +41,14 @@ class TestUploadMeeting:
         assert "id" in result
 
     async def test_upload_no_auth(self, async_client: AsyncClient) -> None:
-        """Upload without authentication, expect 403 Forbidden."""
+        """Upload without authentication, expect 401 Unauthorized."""
         files = _make_audio_upload()
         data = {"title": "Unauthorized Upload"}
         response = await async_client.post(
             f"{API_PREFIX}/meetings/upload", files=files, data=data
         )
 
-        assert response.status_code == 403
+        assert response.status_code == 401
 
 
 class TestListMeetings:

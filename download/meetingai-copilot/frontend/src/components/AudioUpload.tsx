@@ -39,7 +39,11 @@ function formatFileSize(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
-export default function AudioUpload() {
+interface AudioUploadProps {
+  onSuccess?: () => void;
+}
+
+export default function AudioUpload({ onSuccess }: AudioUploadProps) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -48,10 +52,13 @@ export default function AudioUpload() {
   const [targetLanguage, setTargetLanguage] = useState('en');
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState('');
 
   const validateFile = (selectedFile: File): boolean => {
-    const isValidType = ACCEPTED_TYPES.includes(selectedFile.type) || ACCEPTED_EXTENSIONS.some((ext) => selectedFile.name.toLowerCase().endsWith(ext));
+    const isValidType =
+      ACCEPTED_TYPES.includes(selectedFile.type) ||
+      ACCEPTED_EXTENSIONS.some((ext) => selectedFile.name.toLowerCase().endsWith(ext));
     if (!isValidType) {
       setError('Invalid file type. Please upload an MP3, WAV, M4A, or WebM file.');
       return false;
@@ -99,6 +106,7 @@ export default function AudioUpload() {
 
   const handleRemoveFile = () => {
     setFile(null);
+    setUploadProgress(0);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -112,6 +120,7 @@ export default function AudioUpload() {
 
     setError('');
     setUploading(true);
+    setUploadProgress(10);
 
     try {
       const formData = new FormData();
@@ -121,10 +130,24 @@ export default function AudioUpload() {
         formData.append('target_language', targetLanguage);
       }
 
+      // Simulate progress
+      const progressInterval = setInterval(() => {
+        setUploadProgress((prev) => Math.min(prev + 10, 90));
+      }, 500);
+
       const meeting = await apiClient.uploadMeeting(formData);
-      router.push(`/meeting/${meeting.id}`);
+
+      clearInterval(progressInterval);
+      setUploadProgress(100);
+
+      if (onSuccess) {
+        onSuccess();
+      } else {
+        router.push(`/meeting/${meeting.id}`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed. Please try again.');
+      setUploadProgress(0);
     } finally {
       setUploading(false);
     }
@@ -163,16 +186,29 @@ export default function AudioUpload() {
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-dark">{file.name}</p>
               <p className="text-xs text-muted">{formatFileSize(file.size)}</p>
+              {/* Upload progress */}
+              {uploading && (
+                <div className="mt-2">
+                  <div className="progress-bar">
+                    <div
+                      className="progress-bar-fill"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                handleRemoveFile();
-              }}
-              className="flex-shrink-0 rounded-lg p-1.5 text-muted hover:bg-gray-200 hover:text-dark"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            {!uploading && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRemoveFile();
+                }}
+                className="flex-shrink-0 rounded-lg p-1.5 text-muted hover:bg-gray-200 hover:text-dark"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
         ) : (
           <>
@@ -240,7 +276,7 @@ export default function AudioUpload() {
         {uploading ? (
           <span className="flex items-center gap-2">
             <Loader2 className="h-4 w-4 animate-spin" />
-            Uploading...
+            Uploading... {uploadProgress}%
           </span>
         ) : (
           <span className="flex items-center gap-2">

@@ -1,10 +1,14 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const REQUEST_TIMEOUT = 30000; // 30 seconds
+const MAX_RETRIES = 2;
+const RETRY_DELAY = 1000; // 1 second
 
 interface ApiRequestOptions {
   method?: string;
   body?: unknown;
   headers?: Record<string, string>;
   isFormData?: boolean;
+  skipRetry?: boolean;
 }
 
 interface RegisterData {
@@ -51,6 +55,10 @@ interface Meeting {
   updated_at: string;
 }
 
+interface TranslateOptions {
+  target_language: string;
+}
+
 class ApiClient {
   private token: string | null = null;
 
@@ -76,8 +84,40 @@ class ApiClient {
     }
   }
 
-  private async request<T = unknown>(endpoint: string, options: ApiRequestOptions = {}): Promise<T> {
-    const { method = 'GET', body, headers = {}, isFormData = false } = options;
+  private async requestWithTimeout(
+    url: string,
+    config: RequestInit,
+    timeout: number = REQUEST_TIMEOUT
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      const response = await fetch(url, {
+        ...config,
+        signal: controller.signal,
+      });
+      return response;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private async request<T = unknown>(
+    endpoint: string,
+    options: ApiRequestOptions = {}
+  ): Promise<T> {
+    const {
+      method = 'GET',
+      body,
+      headers = {},
+      isFormData = false,
+      skipRetry = false,
+    } = options;
 
     const requestHeaders: Record<string, string> = { ...headers };
 
@@ -99,45 +139,94 @@ class ApiClient {
       config.body = isFormData ? (body as FormData) : JSON.stringify(body);
     }
 
-    const response = await fetch(`${API_BASE}${endpoint}`, config);
+    let lastError: Error | null = null;
+    const attempts = skipRetry ? 1 : MAX_RETRIES + 1;
 
-    if (response.status === 401) {
-      this.clearToken();
-      if (typeof window !== 'undefined') {
-        window.location.href = '/login';
-      }
-      throw new Error('Session expired. Please sign in again.');
-    }
-
-    if (response.status === 422) {
-      const errorData = await response.json();
-      const details = errorData.detail;
-      if (Array.isArray(details)) {
-        const messages = details.map((d: { msg: string; loc?: string[] }) => {
-          const field = d.loc ? d.loc[d.loc.length - 1] : 'field';
-          return `${field}: ${d.msg}`;
-        });
-        throw new Error(messages.join(', '));
-      }
-      throw new Error(details || 'Validation error');
-    }
-
-    if (!response.ok) {
-      let errorMessage = `Request failed with status ${response.status}`;
+    for (let attempt = 0; attempt < attempts; attempt++) {
       try {
-        const errorData = await response.json();
-        errorMessage = errorData.detail || errorData.error || errorData.message || errorMessage;
-      } catch {
-        // Use default error message
+        const response = await this.requestWithTimeout(
+          `${API_BASE}${endpoint}`,
+          config
+        );
+
+        if (response.status === 401) {
+          this.clearToken();
+          if (typeof window !== 'undefined') {
+            window.location.href = '/login';
+          }
+          throw new Error('Session expired. Please sign in again.');
+        }
+
+        if (response.status === 422) {
+          const errorData = await response.json();
+          const details = errorData.detail;
+          if (Array.isArray(details)) {
+            const messages = details.map((d: { msg: string; loc?: string[] }) => {
+              const field = d.loc ? d.loc[d.loc.length - 1] : 'field';
+              return `${field}: ${d.msg}`;
+            });
+            throw new Error(messages.join(', '));
+          }
+          throw new Error(details || 'Validation error');
+        }
+
+        if (!response.ok) {
+          let errorMessage = `Request failed with status ${response.status}`;
+          try {
+            const errorData = await response.json();
+            errorMessage =
+              errorData.detail || errorData.error || errorData.message || errorMessage;
+          } catch {
+            // Use default error message
+          }
+
+          // Don't retry client errors (4xx) except 429 (rate limit)
+          if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+            throw new Error(errorMessage);
+          }
+
+          lastError = new Error(errorMessage);
+
+          if (attempt < attempts - 1) {
+            await this.sleep(RETRY_DELAY * (attempt + 1));
+            continue;
+          }
+          throw lastError;
+        }
+
+        if (response.status === 204) {
+          return undefined as T;
+        }
+
+        return response.json();
+      } catch (err) {
+        if (err instanceof Error) {
+          // Don't retry auth errors
+          if (err.message === 'Session expired. Please sign in again.') {
+            throw err;
+          }
+
+          // Handle abort/timeout
+          if (err.name === 'AbortError') {
+            lastError = new Error('Request timed out. Please try again.');
+            if (attempt < attempts - 1) {
+              await this.sleep(RETRY_DELAY * (attempt + 1));
+              continue;
+            }
+            throw lastError;
+          }
+
+          lastError = err;
+          if (attempt < attempts - 1) {
+            await this.sleep(RETRY_DELAY * (attempt + 1));
+            continue;
+          }
+        }
+        throw lastError || err;
       }
-      throw new Error(errorMessage);
     }
 
-    if (response.status === 204) {
-      return undefined as T;
-    }
-
-    return response.json();
+    throw lastError || new Error('Request failed');
   }
 
   async register(data: RegisterData): Promise<User> {
@@ -167,6 +256,7 @@ class ApiClient {
       method: 'POST',
       body: formData,
       isFormData: true,
+      skipRetry: true,
     });
   }
 
@@ -190,6 +280,13 @@ class ApiClient {
     });
   }
 
+  async translateMeeting(id: string, options: TranslateOptions): Promise<Meeting> {
+    return this.request<Meeting>(`/meetings/${id}/translate`, {
+      method: 'POST',
+      body: options,
+    });
+  }
+
   async deleteMeeting(id: string): Promise<void> {
     return this.request<void>(`/meetings/${id}`, {
       method: 'DELETE',
@@ -199,10 +296,4 @@ class ApiClient {
 
 export const apiClient = new ApiClient();
 
-export type {
-  User,
-  Meeting,
-  LoginResponse,
-  RegisterData,
-  LoginData,
-};
+export type { User, Meeting, LoginResponse, RegisterData, LoginData, TranslateOptions };

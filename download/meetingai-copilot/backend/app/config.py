@@ -27,6 +27,7 @@ _INSECURE_SECRET_KEYS = {
     "changeme",
     "change-me",
     "change_in_production",
+    "change-me-to-a-very-long-random-secret-key-at-least-32-chars",
 }
 
 
@@ -37,7 +38,8 @@ class Settings(BaseSettings):
         DATABASE_URL: PostgreSQL connection string (asyncpg driver).
         SECRET_KEY: Secret key for JWT token signing (required, no insecure defaults).
         ALGORITHM: JWT signing algorithm.
-        ACCESS_TOKEN_EXPIRE_MINUTES: Token expiration time in minutes.
+        ACCESS_TOKEN_EXPIRE_MINUTES: Access token expiration time in minutes.
+        REFRESH_TOKEN_EXPIRE_DAYS: Refresh token expiration time in days.
         GROQ_API_KEY: API key for Groq services.
         OPENROUTER_API_KEY: API key for OpenRouter services.
         WHISPER_MODEL_SIZE: Whisper model size for transcription.
@@ -49,12 +51,14 @@ class Settings(BaseSettings):
         RATE_LIMIT_PER_MINUTE: Maximum number of requests per minute per client.
         GROQ_MODEL: Model name for Groq API calls.
         OPENROUTER_MODEL: Model name for OpenRouter API calls.
+        LOG_LEVEL: Logging level for the application.
     """
 
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@db:5432/meetingai"
     SECRET_KEY: str  # Required - no default
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     GROQ_API_KEY: Optional[str] = None
     OPENROUTER_API_KEY: Optional[str] = None
     WHISPER_MODEL_SIZE: str = "base"
@@ -63,24 +67,42 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE_MB: int = 100
     CORS_ORIGINS: str = "http://localhost:3000"
     REDIS_URL: str = "redis://redis:6379/0"
-    RATE_LIMIT_PER_MINUTE: int = 30
+    RATE_LIMIT_PER_MINUTE: int = 60
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     OPENROUTER_MODEL: str = "meta-llama/llama-3.3-70b-instruct"
+    LOG_LEVEL: str = "INFO"
 
     @field_validator("SECRET_KEY")
     @classmethod
     def validate_secret_key(cls, v: str) -> str:
-        """Reject insecure or well-known default SECRET_KEY values."""
+        """Reject insecure or well-known default SECRET_KEY values.
+
+        Validates that the SECRET_KEY is not a known insecure default
+        and meets the minimum length requirement of 32 characters.
+        """
         if v.strip().lower() in _INSECURE_SECRET_KEYS:
             raise ValueError(
                 "SECRET_KEY is set to a known insecure default. "
                 "Please set a strong, unique SECRET_KEY in your environment or .env file."
             )
-        if len(v) < 16:
+        if len(v) < 32:
             raise ValueError(
-                "SECRET_KEY must be at least 16 characters long."
+                "SECRET_KEY must be at least 32 characters long. "
+                "Please use a cryptographically strong random key."
             )
         return v
+
+    @field_validator("LOG_LEVEL")
+    @classmethod
+    def validate_log_level(cls, v: str) -> str:
+        """Validate that LOG_LEVEL is a valid Python logging level."""
+        valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        upper = v.strip().upper()
+        if upper not in valid_levels:
+            raise ValueError(
+                f"LOG_LEVEL must be one of {valid_levels}, got '{v}'"
+            )
+        return upper
 
     @property
     def cors_origins_list(self) -> list[str]:

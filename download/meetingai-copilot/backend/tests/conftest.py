@@ -2,8 +2,9 @@
 Test configuration and fixtures for MeetingAI Copilot backend tests.
 
 Provides async test client, test database (SQLite in-memory), test user,
-and authenticated client fixtures. Overrides the production get_db dependency
-to use a test database for full isolation.
+authenticated client fixtures, and mock data for external services.
+Overrides the production get_db dependency to use a test database for
+full isolation.
 
 NOTE: The production .env file is temporarily moved aside during the import
 of app modules so that ``load_dotenv(override=True)`` in config.py cannot
@@ -17,7 +18,9 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import AsyncGenerator
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import String
@@ -198,6 +201,54 @@ async def auth_client(async_client: AsyncClient, test_user: dict) -> AsyncClient
     }
     response = await async_client.post(f"{API_PREFIX}/auth/login", json=login_data)
     assert response.status_code == 200
-    token = response.json()["access_token"]
+    tokens = response.json()
+    token = tokens["access_token"]
     async_client.headers["Authorization"] = f"Bearer {token}"
+    # Also store the refresh_token on the client for tests that need it
+    async_client._refresh_token = tokens["refresh_token"]  # type: ignore[attr-defined]
     return async_client
+
+
+# ---------------------------------------------------------------------------
+# Additional data fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sample_user_data() -> dict:
+    """Sample user data for registration tests."""
+    return {
+        "email": "test@example.com",
+        "password": "TestPass123",
+        "full_name": "Test User",
+    }
+
+
+@pytest.fixture
+def sample_login_data() -> dict:
+    """Sample login data."""
+    return {
+        "email": "test@example.com",
+        "password": "TestPass123",
+    }
+
+
+@pytest.fixture
+def mock_groq_response() -> dict:
+    """Mock response from Groq Whisper API."""
+    return {
+        "text": "This is a test transcription of a meeting.",
+        "language": "en",
+        "duration": 120.5,
+    }
+
+
+@pytest.fixture
+def mock_llm_summary() -> dict:
+    """Mock LLM summary response."""
+    return {
+        "summary": "The team discussed project timeline and deliverables.",
+        "key_decisions": ["Launch date set for Q2", "Budget approved for hiring"],
+        "action_items": ["John to prepare roadmap", "Jane to finalize budget"],
+        "participants": ["John", "Jane", "Bob"],
+    }

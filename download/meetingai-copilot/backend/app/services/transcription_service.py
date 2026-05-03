@@ -6,15 +6,16 @@ with support for large file chunking and error handling.
 """
 
 import os
-import logging
 from typing import Optional
 
 import httpx
 from openai import AsyncOpenAI
 
 from app.config import settings
+from app.core.logging import get_logger
+from app.core.exceptions import ExternalServiceError
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Maximum file size for Groq Whisper API (25MB)
 GROQ_WHISPER_MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB in bytes
@@ -287,9 +288,18 @@ async def transcribe_audio(file_path: str, language: Optional[str] = None) -> di
             "duration": total_duration,
         }
 
+    except ExternalServiceError:
+        # Clean up chunks on failure
+        if file_size > GROQ_WHISPER_MAX_FILE_SIZE:
+            _cleanup_chunks(chunk_paths)
+        raise
     except Exception as exc:
         logger.error("Transcription failed for file %s: %s", file_path, str(exc))
         # Clean up chunks on failure
         if file_size > GROQ_WHISPER_MAX_FILE_SIZE:
             _cleanup_chunks(chunk_paths)
-        raise Exception(f"Transcription failed: {str(exc)}") from exc
+        raise ExternalServiceError(
+            service="Groq Whisper",
+            message=f"Transcription failed: {str(exc)}",
+            details={"file_path": file_path},
+        ) from exc

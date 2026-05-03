@@ -33,7 +33,7 @@ class TestRegister:
     async def test_register_duplicate_email(
         self, async_client: AsyncClient, test_user: dict
     ) -> None:
-        """Register with an email that is already taken, expect 400."""
+        """Register with an email that is already taken, expect 409 Conflict."""
         user_data = {
             "email": test_user["email"],
             "password": "Anotherpassword123",
@@ -41,8 +41,10 @@ class TestRegister:
         }
         response = await async_client.post(f"{API_PREFIX}/auth/register", json=user_data)
 
-        assert response.status_code == 400
-        assert "already exists" in response.json()["detail"]
+        assert response.status_code == 409
+        body = response.json()
+        error = body.get("error", body)
+        assert "already exists" in error.get("message", error.get("detail", ""))
 
     async def test_register_invalid_email(self, async_client: AsyncClient) -> None:
         """Register with an invalid email format, expect 422 Unprocessable."""
@@ -123,11 +125,11 @@ class TestGetMe:
         assert data["is_active"] is True
 
     async def test_get_me_unauthenticated(self, async_client: AsyncClient) -> None:
-        """Get /auth/me without providing a token, expect 403 Forbidden.
+        """Get /auth/me without providing a token, expect 401 Unauthorized.
 
-        FastAPI's HTTPBearer security scheme returns 403 when no
-        credentials are provided (not 401, per Starlette implementation).
+        The custom AuthenticationError exception returns 401 when no
+        credentials are provided or credentials are invalid.
         """
         response = await async_client.get(f"{API_PREFIX}/auth/me")
 
-        assert response.status_code == 403
+        assert response.status_code == 401

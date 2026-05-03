@@ -4,12 +4,12 @@ Translation service for the MeetingAI Copilot application.
 Translates text between languages using the shared LLM client.
 """
 
-import logging
-
 from app.config import settings
 from app.services.llm_client import chat_completion
+from app.core.logging import get_logger
+from app.core.exceptions import ExternalServiceError
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def translate_text(text: str, source_lang: str, target_lang: str) -> str:
@@ -72,6 +72,11 @@ async def translate_text(text: str, source_lang: str, target_lang: str) -> str:
 
         return translated
 
+    except ExternalServiceError:
+        raise
     except Exception as exc:
         logger.error("Translation failed: %s", str(exc))
-        raise RuntimeError(f"Translation failed: {exc}") from exc
+        raise ExternalServiceError(
+            service="LLM Translation",
+            message=f"Translation failed: {exc}",
+        ) from exc

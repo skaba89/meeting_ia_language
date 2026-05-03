@@ -3,14 +3,14 @@ Meeting API routes for the MeetingAI Copilot application.
 
 Provides endpoints for uploading audio, transcribing, generating summaries,
 translating, listing, retrieving details, and deleting meetings.
+Uses shared validation utilities from app.core.validators.
 """
 
 import os
 import uuid
-import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status
+from fastapi import APIRouter, Depends, UploadFile, File, Form, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,14 +22,29 @@ from app.schemas.meeting import (
     MeetingResponse,
     MeetingDetail,
     SummarySchema,
+    TranslationRequest,
 )
 from app.middleware.auth_middleware import get_current_user
 from app.services.transcription_service import transcribe_audio
 from app.services.summary_service import generate_summary
 from app.services.translation_service import translate_text
 from app.tasks import process_transcription, process_summary, process_translation
+from app.core.logging import get_logger
+from app.core.exceptions import (
+    NotFoundError,
+    ValidationError,
+    UnsupportedFileTypeError,
+    FileTooLargeError,
+)
+from app.core.validators import (
+    validate_language_code,
+    validate_file_extension,
+    validate_file_size,
+    ALLOWED_AUDIO_EXTENSIONS,
+    MAX_FILE_SIZE_BYTES,
+)
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 meetings_router = APIRouter(prefix="/meetings", tags=["Meetings"])
 
@@ -45,33 +60,31 @@ ALLOWED_AUDIO_TYPES = {
     "audio/ogg",
 }
 
-# Allowed file extensions
-ALLOWED_EXTENSIONS = {".mp3", ".wav", ".m4a", ".webm", ".ogg"}
-
 
 def _validate_audio_file(filename: Optional[str], content_type: Optional[str]) -> None:
     """Validate that an uploaded file is an allowed audio type.
+
+    Uses the shared validate_file_extension utility from core.validators
+    for extension checking, plus MIME-type validation.
 
     Args:
         filename: The original filename of the uploaded file.
         content_type: The MIME type reported by the upload.
 
     Raises:
-        HTTPException: 400 if the file type is not allowed.
+        ValidationError: If no filename is provided.
+        UnsupportedFileTypeError: If the file type is not allowed.
     """
     if not filename:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No filename provided",
+        raise ValidationError(
+            message="No filename provided",
         )
 
-    # Check file extension
-    _, ext = os.path.splitext(filename.lower())
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File type '{ext}' not allowed. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}",
-        )
+    # Use shared validator for file extension
+    try:
+        validate_file_extension(filename)
+    except ValueError as exc:
+        raise UnsupportedFileTypeError(allowed=sorted(ALLOWED_AUDIO_EXTENSIONS)) from exc
 
     # Check content type if provided
     if content_type and content_type not in ALLOWED_AUDIO_TYPES:
@@ -91,7 +104,7 @@ def _validate_audio_file(filename: Optional[str], content_type: Optional[str]) -
     description="Upload an audio file and create a new meeting record.",
 )
 async def upload_meeting(
-    audio: UploadFile = File(..., description="Audio file (mp3/wav/m4a/webm)"),
+    audio: UploadFile = File(..., description="Audio file (mp3/wav/m4a/webm/ogg/flac)"),
     title: str = Form(..., min_length=1, max_length=500, description="Meeting title"),
     target_language: Optional[str] = Form(None, max_length=10, description="Target language for translation"),
     db: AsyncSession = Depends(get_db),
@@ -101,15 +114,25 @@ async def upload_meeting(
     # Validate the audio file type
     _validate_audio_file(audio.filename, audio.content_type)
 
+    # Validate target language if provided
+    if target_language:
+        try:
+            target_language = validate_language_code(target_language)
+        except ValueError as exc:
+            raise ValidationError(
+                message=str(exc),
+                details={"field": "target_language", "value": target_language},
+            ) from exc
+
     # Read the file content and check size
     max_size_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
     contents = await audio.read()
 
-    if len(contents) > max_size_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File size exceeds maximum allowed size of {settings.MAX_UPLOAD_SIZE_MB}MB",
-        )
+    # Use shared validator for file size
+    try:
+        validate_file_size(len(contents), max_bytes=max_size_bytes)
+    except ValueError as exc:
+        raise FileTooLargeError(max_size_mb=settings.MAX_UPLOAD_SIZE_MB) from exc
 
     # Generate a unique filename to avoid collisions
     file_extension = os.path.splitext(audio.filename)[1].lower() if audio.filename else ".mp3"
@@ -133,9 +156,9 @@ async def upload_meeting(
         )
     except OSError as exc:
         logger.error("Failed to save uploaded file: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to save uploaded file",
+        raise ValidationError(
+            message="Failed to save uploaded file",
+            details={"error": str(exc)},
         ) from exc
 
     # Create the meeting record
@@ -182,15 +205,12 @@ async def transcribe_meeting(
     meeting = result.scalar_one_or_none()
 
     if meeting is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Meeting not found",
-        )
+        raise NotFoundError(resource="Meeting", resource_id=meeting_id)
 
     if not meeting.audio_file_path or not os.path.exists(meeting.audio_file_path):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Meeting has no audio file or file was deleted",
+        raise ValidationError(
+            message="Meeting has no audio file or file was deleted",
+            details={"meeting_id": meeting_id},
         )
 
     # Update status to transcribing and dispatch Celery task
@@ -225,15 +245,12 @@ async def summarize_meeting(
     meeting = result.scalar_one_or_none()
 
     if meeting is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Meeting not found",
-        )
+        raise NotFoundError(resource="Meeting", resource_id=meeting_id)
 
     if not meeting.transcription_text:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Meeting has no transcription text. Transcribe the meeting first.",
+        raise ValidationError(
+            message="Meeting has no transcription text. Transcribe the meeting first.",
+            details={"meeting_id": meeting_id, "status": meeting.status.value if hasattr(meeting.status, 'value') else str(meeting.status)},
         )
 
     # Update status to summarizing and dispatch Celery task
@@ -262,14 +279,26 @@ async def translate_meeting(
     current_user: User = Depends(get_current_user),
 ) -> Meeting:
     """Translate a meeting's transcription to a target language (async via Celery)."""
+    # Validate target language using shared validator
+    try:
+        target_language = validate_language_code(target_language)
+    except ValueError as exc:
+        raise ValidationError(
+            message=str(exc),
+            details={"field": "target_language", "value": target_language},
+        ) from exc
+
     result = await db.execute(
         select(Meeting).where(Meeting.id == meeting_id, Meeting.user_id == current_user.id)
     )
     meeting = result.scalar_one_or_none()
     if meeting is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
+        raise NotFoundError(resource="Meeting", resource_id=meeting_id)
     if not meeting.transcription_text:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Meeting has no transcription. Transcribe first.")
+        raise ValidationError(
+            message="Meeting has no transcription. Transcribe first.",
+            details={"meeting_id": meeting_id},
+        )
 
     meeting.target_language = target_language
     await db.flush()
@@ -325,10 +354,7 @@ async def get_meeting(
     meeting = result.scalar_one_or_none()
 
     if meeting is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Meeting not found",
-        )
+        raise NotFoundError(resource="Meeting", resource_id=meeting_id)
 
     return meeting
 
@@ -351,10 +377,7 @@ async def delete_meeting(
     meeting = result.scalar_one_or_none()
 
     if meeting is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Meeting not found",
-        )
+        raise NotFoundError(resource="Meeting", resource_id=meeting_id)
 
     # Delete the audio file from the filesystem
     if meeting.audio_file_path and os.path.exists(meeting.audio_file_path):

@@ -6,15 +6,16 @@ Returns parsed JSON with summary, key decisions, action items, and participants.
 """
 
 import json
-import logging
 import re
 from typing import Optional
 
 from app.config import settings
 from app.schemas.meeting import SummarySchema
 from app.services.llm_client import chat_completion
+from app.core.logging import get_logger
+from app.core.exceptions import ExternalServiceError
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 SYSTEM_PROMPT = (
     "You are an expert meeting analyst. Analyze the following meeting transcription "
@@ -139,6 +140,11 @@ async def generate_summary(
             action_items=[],
             participants=[],
         )
+    except ExternalServiceError:
+        raise
     except Exception as exc:
         logger.error("Summary generation failed: %s", exc)
-        raise RuntimeError(f"Summary generation failed: {exc}") from exc
+        raise ExternalServiceError(
+            service="LLM Summary",
+            message=f"Summary generation failed: {exc}",
+        ) from exc
