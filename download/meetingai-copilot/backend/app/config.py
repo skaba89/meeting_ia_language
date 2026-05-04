@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     MAX_UPLOAD_SIZE_MB: int = 100
     CORS_ORIGINS: str = "http://localhost:3000"
-    REDIS_URL: str = "redis://redis:6379/0"
+    REDIS_URL: str = "redis://localhost:6379/0"
     RATE_LIMIT_PER_MINUTE: int = 60
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     OPENROUTER_MODEL: str = "meta-llama/llama-3.3-70b-instruct"

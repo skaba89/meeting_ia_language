@@ -29,6 +29,15 @@ from app.services.transcription_service import transcribe_audio
 from app.services.summary_service import generate_summary
 from app.services.translation_service import translate_text
 from app.tasks import process_transcription, process_summary, process_translation
+
+# Check if Celery is available (needs Redis)
+_celery_available = False
+try:
+    from app.celery_worker import celery_app
+    celery_app.connection().ensure_connection(max_retries=1)
+    _celery_available = True
+except Exception:
+    _celery_available = False
 from app.core.logging import get_logger
 from app.core.exceptions import (
     NotFoundError,
@@ -213,15 +222,21 @@ async def transcribe_meeting(
             details={"meeting_id": meeting_id},
         )
 
-    # Update status to transcribing and dispatch Celery task
+    # Update status to transcribing
     meeting.status = MeetingStatus.TRANSCRIBING
     await db.flush()
 
-    process_transcription.delay(meeting_id=str(meeting.id))
+    if _celery_available:
+        # Dispatch Celery task (production mode with Redis)
+        process_transcription.delay(meeting_id=str(meeting.id))
+        logger.info("Transcription task dispatched (Celery) for meeting %s", meeting.id)
+    else:
+        # Direct async processing (development mode without Redis)
+        import asyncio
+        asyncio.create_task(_transcribe_direct(meeting_id=str(meeting.id)))
+        logger.info("Transcription task dispatched (direct async) for meeting %s", meeting.id)
 
     await db.refresh(meeting)
-    logger.info("Transcription task dispatched for meeting %s", meeting.id)
-
     return meeting
 
 
@@ -253,15 +268,19 @@ async def summarize_meeting(
             details={"meeting_id": meeting_id, "status": meeting.status.value if hasattr(meeting.status, 'value') else str(meeting.status)},
         )
 
-    # Update status to summarizing and dispatch Celery task
+    # Update status to summarizing
     meeting.status = MeetingStatus.SUMMARIZING
     await db.flush()
 
-    process_summary.delay(meeting_id=str(meeting.id))
+    if _celery_available:
+        process_summary.delay(meeting_id=str(meeting.id))
+        logger.info("Summary task dispatched (Celery) for meeting %s", meeting.id)
+    else:
+        import asyncio
+        asyncio.create_task(_summarize_direct(meeting_id=str(meeting.id)))
+        logger.info("Summary task dispatched (direct async) for meeting %s", meeting.id)
 
     await db.refresh(meeting)
-    logger.info("Summary task dispatched for meeting %s", meeting.id)
-
     return meeting
 
 
@@ -304,8 +323,11 @@ async def translate_meeting(
     await db.flush()
     await db.refresh(meeting)
 
-    # Dispatch translation task
-    process_translation.delay(meeting_id=str(meeting.id), target_language=target_language)
+    if _celery_available:
+        process_translation.delay(meeting_id=str(meeting.id), target_language=target_language)
+    else:
+        import asyncio
+        asyncio.create_task(_translate_direct(meeting_id=str(meeting.id), target_language=target_language))
 
     logger.info("Translation task dispatched for meeting %s to %s", meeting.id, target_language)
 
@@ -396,3 +418,128 @@ async def delete_meeting(
     await db.flush()
 
     logger.info("Meeting deleted: id=%s, user=%s", meeting_id, current_user.id)
+
+
+# ---------------------------------------------------------------------------
+# Direct async processing functions (dev mode without Celery/Redis)
+# ---------------------------------------------------------------------------
+
+async def _transcribe_direct(meeting_id: str) -> None:
+    """Transcribe audio directly (no Celery) for dev mode."""
+    from app.database import AsyncSessionLocal
+    async with AsyncSessionLocal() as session:
+        try:
+            result = await session.execute(
+                select(Meeting).where(Meeting.id == meeting_id)
+            )
+            meeting = result.scalar_one_or_none()
+            if not meeting:
+                logger.error("Meeting %s not found for transcription", meeting_id)
+                return
+
+            transcription_result = await transcribe_audio(
+                file_path=meeting.audio_file_path,
+                language=None,
+            )
+
+            meeting.transcription_text = transcription_result["text"]
+            meeting.language = transcription_result["language"]
+            meeting.audio_duration = transcription_result["duration"]
+            meeting.status = MeetingStatus.TRANSCRIBED
+            await session.commit()
+
+            logger.info("Transcription complete for meeting %s", meeting_id)
+
+        except Exception as exc:
+            logger.error("Transcription failed for meeting %s: %s", meeting_id, exc)
+            try:
+                result = await session.execute(
+                    select(Meeting).where(Meeting.id == meeting_id)
+                )
+                meeting = result.scalar_one_or_none()
+                if meeting:
+                    meeting.status = MeetingStatus.FAILED
+                    await session.commit()
+            except Exception:
+                pass
+
+
+async def _summarize_direct(meeting_id: str) -> None:
+    """Generate summary directly (no Celery) for dev mode."""
+    from app.database import AsyncSessionLocal
+    from app.schemas.meeting import SummarySchema
+    async with AsyncSessionLocal() as session:
+        try:
+            result = await session.execute(
+                select(Meeting).where(Meeting.id == meeting_id)
+            )
+            meeting = result.scalar_one_or_none()
+            if not meeting or not meeting.transcription_text:
+                logger.error("Meeting %s not found or no transcription for summary", meeting_id)
+                return
+
+            summary: SummarySchema = await generate_summary(
+                transcription_text=meeting.transcription_text,
+                language=meeting.language or "en",
+            )
+
+            meeting.summary_json = summary.model_dump()
+
+            # Auto-translate if target language is set
+            if meeting.target_language and meeting.language and meeting.target_language != meeting.language:
+                try:
+                    translated_text = await translate_text(
+                        text=meeting.transcription_text,
+                        source_lang=meeting.language,
+                        target_lang=meeting.target_language,
+                    )
+                    meeting.translation_text = translated_text
+                except Exception as translation_exc:
+                    logger.warning("Translation failed for meeting %s: %s", meeting_id, translation_exc)
+
+            meeting.status = MeetingStatus.COMPLETED
+            await session.commit()
+
+            logger.info("Summary complete for meeting %s", meeting_id)
+
+        except Exception as exc:
+            logger.error("Summary failed for meeting %s: %s", meeting_id, exc)
+            try:
+                result = await session.execute(
+                    select(Meeting).where(Meeting.id == meeting_id)
+                )
+                meeting = result.scalar_one_or_none()
+                if meeting:
+                    meeting.status = MeetingStatus.FAILED
+                    await session.commit()
+            except Exception:
+                pass
+
+
+async def _translate_direct(meeting_id: str, target_language: str) -> None:
+    """Translate directly (no Celery) for dev mode."""
+    from app.database import AsyncSessionLocal
+    async with AsyncSessionLocal() as session:
+        try:
+            result = await session.execute(
+                select(Meeting).where(Meeting.id == meeting_id)
+            )
+            meeting = result.scalar_one_or_none()
+            if not meeting or not meeting.transcription_text:
+                logger.error("Meeting %s not found or no transcription for translation", meeting_id)
+                return
+
+            translated_text = await translate_text(
+                text=meeting.transcription_text,
+                source_lang=meeting.language or "en",
+                target_lang=target_language,
+            )
+
+            meeting.translation_text = translated_text
+            meeting.target_language = target_language
+            await session.commit()
+
+            logger.info("Translation complete for meeting %s to %s", meeting_id, target_language)
+
+        except Exception as exc:
+            logger.error("Translation failed for meeting %s: %s", meeting_id, exc)

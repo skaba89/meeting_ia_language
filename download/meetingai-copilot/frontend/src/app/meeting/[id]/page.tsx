@@ -176,7 +176,7 @@ export default function MeetingDetailPage() {
       setActionLoading('translate');
       setActionError('');
       setShowTranslateDropdown(false);
-      await apiClient.translateMeeting(meetingId, { target_language: translateLanguage });
+      await apiClient.translateMeeting(meetingId, translateLanguage);
       toast.success(`Translation to ${LANGUAGES[translateLanguage]} started`);
       await fetchMeeting();
       setActiveTab('translation');

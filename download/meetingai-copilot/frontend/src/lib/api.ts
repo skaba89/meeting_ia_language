@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 const REQUEST_TIMEOUT = 30000; // 30 seconds
 const MAX_RETRIES = 2;
 const RETRY_DELAY = 1000; // 1 second
@@ -24,7 +24,9 @@ interface LoginData {
 
 interface LoginResponse {
   access_token: string;
+  refresh_token: string;
   token_type: string;
+  expires_in: number;
 }
 
 interface User {
@@ -243,6 +245,11 @@ class ApiClient {
     });
     if (response.access_token) {
       this.setToken(response.access_token);
+      // Save refresh token for silent token refresh
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('meetingai_refresh_token', response.refresh_token);
+        localStorage.setItem('meetingai_token_expiry', String(Date.now() + response.expires_in * 1000));
+      }
     }
     return response;
   }
@@ -280,10 +287,9 @@ class ApiClient {
     });
   }
 
-  async translateMeeting(id: string, options: TranslateOptions): Promise<Meeting> {
-    return this.request<Meeting>(`/meetings/${id}/translate`, {
+  async translateMeeting(id: string, targetLanguage: string): Promise<Meeting> {
+    return this.request<Meeting>(`/meetings/${id}/translate?target_language=${encodeURIComponent(targetLanguage)}`, {
       method: 'POST',
-      body: options,
     });
   }
 
