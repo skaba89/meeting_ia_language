@@ -38,7 +38,18 @@ export function AuthPage() {
       setAuth(response.access_token, response.user);
       toast.success(isLogin ? "Welcome back!" : "Account created successfully!");
     } catch (error: any) {
-      toast.error(error.message || "Authentication failed");
+      const msg = error.message || "Authentication failed";
+      // If registration gets 409 (email exists), suggest logging in
+      if (!isLogin && msg.includes("already exists")) {
+        toast.error("This email is already registered. Please sign in instead.", {
+          action: {
+            label: "Sign in",
+            onClick: () => setIsLogin(true),
+          },
+        });
+      } else {
+        toast.error(msg);
+      }
     } finally {
       setLoading(false);
     }

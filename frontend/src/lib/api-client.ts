@@ -1,13 +1,12 @@
 /**
  * API client for communicating with the MeetingAI Copilot FastAPI backend.
- * Handles authentication tokens, error responses, and the XTransformPort gateway routing.
+ * Handles authentication tokens, error responses, and API routing.
  */
 
-const API_PORT = 8000;
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 function getApiUrl(path: string): string {
-  // In sandbox environment, route through Caddy gateway with XTransformPort
-  return `/api${path}?XTransformPort=${API_PORT}`;
+  return `${API_BASE}${path}`;
 }
 
 function getAuthHeaders(): HeadersInit {
@@ -30,7 +29,9 @@ async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: response.statusText }));
-    throw new Error(error.detail || `API Error: ${response.status}`);
+    // Handle both FastAPI HTTPException format {detail: "..."} and custom format {error: {message: "..."}}
+    const message = error.detail || error.error?.message || error.message || `API Error: ${response.status}`;
+    throw new Error(message);
   }
 
   return response.json();
